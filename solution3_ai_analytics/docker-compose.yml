@@ -1,0 +1,25 @@
+# Solution 3 — single Postgres + pgvector service.
+# Host port 55432 is used deliberately to avoid clashing with any default
+# Postgres (5432) already running on the dev machine. See README / .env.example.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: solution3_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: solution3
+    ports:
+      - "55432:5432"
+    volumes:
+      - solution3_pgdata:/var/lib/postgresql/data
+      # Init scripts run ONCE, on a fresh volume: extension, schemas, roles, grants.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d solution3"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  solution3_pgdata:

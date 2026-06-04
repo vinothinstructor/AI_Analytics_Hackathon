@@ -1,0 +1,101 @@
+# Single source of truth for the curated demo question set.
+# Consumed by: scripts/precache.py (capture), /demo-questions (starter chips),
+# run.py (scripted follow-up chips via metadata.scripted_followups).
+#
+# `scripted` = the wow set (hero arc + standalone wows): each hand-authored in
+# FAKE with the exact chart type, and captured for CACHED/LIVE. `supporting_extras`
+# answer respectably via the heuristic but aren't scripted. Flat distributions
+# (deviations-by-type, logins-over-time, session-duration-by-role) are deliberately
+# excluded — they make boring charts (per the data probe).
+
+# The scripted multi-turn hero arc (one conversation): hero -> A -> B, then a
+# presentation change. Follow-ups B onward chain into standalone wows.
+hero_arc:
+  - "Which of my MOON-2026 sites are at risk of missing enrollment targets, and what's the 60-day trend?"
+  - "Show the 60-day enrollment trend for the at-risk sites."
+  - "What's driving the screen-failure rate at Tokyo?"
+
+presentation_changes:
+  - "show me as a pie chart"
+  - "as a table"
+
+# The 3 empty-state starter chips — chosen to hint at varied visuals.
+starters:
+  - "Which of my MOON-2026 sites are at risk of missing enrollment targets, and what's the 60-day trend?"
+  - "Break down protocol deviations by severity."
+  - "Show cumulative enrollment over the past year for MOON-2026."
+
+# Wow set (scripted): question -> chart type, one-line note, and curated chips
+# (which re-ask exact captured questions, so chip-chains stay cache-consistent).
+scripted:
+  - question: "Which of my MOON-2026 sites are at risk of missing enrollment targets, and what's the 60-day trend?"
+    chart: bar
+    note: "Hero — enrollment vs Q2 target, 14 sites, status-colored."
+    followups:
+      - "Show the 60-day enrollment trend for the at-risk sites."
+      - "What's driving the screen-failure rate at Tokyo?"
+  - question: "Show the 60-day enrollment trend for the at-risk sites."
+    chart: line
+    note: "Healthy vs stalled multi-line: Munich climbing; Tokyo/Boston/Toronto flat."
+    followups:
+      - "Where are my protocol deviations concentrated across MOON-2026 sites?"
+      - "What's driving the screen-failure rate at Tokyo?"
+  - question: "What's driving the screen-failure rate at Tokyo?"
+    chart: bar
+    note: "Tokyo screening outcomes — the ~29% rate."
+    followups:
+      - "Show screen-failure rates across my MOON-2026 sites."
+      - "Where are my protocol deviations concentrated across MOON-2026 sites?"
+  - question: "Where are my protocol deviations concentrated across MOON-2026 sites?"
+    chart: bar
+    note: "Ranked bar — deviations cluster at Tokyo 40 / Toronto 37 / Boston 27."
+    followups:
+      - "Break down protocol deviations by severity."
+      - "How do site size and screen-failure rate relate for MOON-2026?"
+  - question: "How do site size and screen-failure rate relate for MOON-2026?"
+    chart: scatter
+    note: "Scatter — inverse relationship; at-risk sites top-left cluster."
+    followups:
+      - "Show screen-failure rates across my MOON-2026 sites."
+      - "Where are my protocol deviations concentrated across MOON-2026 sites?"
+  - question: "Show cumulative enrollment over the past year for MOON-2026."
+    chart: area
+    note: "Area — smooth cumulative curve to 831."
+    followups:
+      - "Which of my MOON-2026 sites are at risk of missing enrollment targets, and what's the 60-day trend?"
+      - "Where are my protocol deviations concentrated across MOON-2026 sites?"
+  - question: "Break down protocol deviations by severity."
+    chart: donut
+    note: "Donut — minor 126 / major 51 / critical 23."
+    followups:
+      - "Where are my protocol deviations concentrated across MOON-2026 sites?"
+      - "What's the visit completion mix for MOON-2026?"
+  - question: "What's the visit completion mix for MOON-2026?"
+    chart: pie
+    note: "Pie — completed/scheduled/missed ≈ 70/20/10."
+    followups:
+      - "Break down protocol deviations by severity."
+      - "Show cumulative enrollment over the past year for MOON-2026."
+  - question: "Show screen-failure rates across my MOON-2026 sites."
+    chart: bar
+    note: "Ranked bar — 3-site cluster ~30% then sharp drop."
+    followups:
+      - "How do site size and screen-failure rate relate for MOON-2026?"
+      - "Where are my protocol deviations concentrated across MOON-2026 sites?"
+
+# Supporting extras — answerable respectably via the heuristic (clean tables),
+# good for judge prompts; not scripted.
+supporting_extras:
+  - {question: "What's the average screen-failure rate by country?", chart: table, note: "screen-failure by country (gentle)"}
+  - {question: "Compare enrolled patients across all studies.", chart: table, note: "portfolio across studies"}
+  - {question: "How many patients consented versus were randomized?", chart: table, note: "consent vs randomization funnel"}
+  - {question: "List all sites in Germany.", chart: table, note: "single-table filter"}
+  - {question: "Which investigators specialize in Oncology?", chart: table, note: "filter + join"}
+  - {question: "Count sites per country.", chart: table, note: "GROUP BY country"}
+  - {question: "How many visits were completed versus missed?", chart: table, note: "visit status counts"}
+  - {question: "How many investigators are assigned per study?", chart: table, note: "investigators per study"}
+
+# Graceful-decline demonstrators.
+decline_demonstrators:
+  - {question: "What's the average age of the patients?", note: "no 'age' field -> polite decline"}
+  - {question: "What's the weather today?", note: "off-domain -> polite decline"}

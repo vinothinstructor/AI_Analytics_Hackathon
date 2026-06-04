@@ -1,0 +1,107 @@
+# Full data dictionary for all 8 app-schema tables (B8).
+# This is the complete schema the LLM sees — NOT scoped to demo questions.
+# Every table is multi-tenant: tenant_column is sponsor_id.
+
+tables:
+  - name: studies
+    description: >
+      Clinical trials (studies) run by the sponsor. One row per study/protocol.
+      Identified by a human-readable code such as MOON-2026.
+    primary_key: study_id
+    tenant_column: sponsor_id
+    columns:
+      - {name: study_id, type: integer, description: "Surrogate primary key."}
+      - {name: sponsor_id, type: text, description: "Owning sponsor (tenant). Always filter on this."}
+      - {name: code, type: text, description: "Protocol code, e.g. MOON-2026. Unique."}
+      - {name: name, type: text, description: "Study title."}
+      - {name: phase, type: text, description: "Trial phase: Phase I/II/III."}
+      - {name: therapeutic_area, type: text, description: "Disease area, e.g. Oncology."}
+      - {name: status, type: text, description: "Lifecycle status, e.g. Active."}
+      - {name: start_date, type: date, description: "Study start date."}
+
+  - name: sites
+    description: >
+      Investigative sites (hospitals/clinics) participating in a study. Each site
+      belongs to exactly one study and has an enrollment target.
+    primary_key: site_id
+    tenant_column: sponsor_id
+    columns:
+      - {name: site_id, type: integer, description: "Surrogate primary key. For MOON-2026 this is also the demo 'Site #'."}
+      - {name: sponsor_id, type: text, description: "Owning sponsor (tenant)."}
+      - {name: study_id, type: integer, description: "FK -> studies.study_id."}
+      - {name: name, type: text, description: "Site name (often the city)."}
+      - {name: country, type: text, description: "ISO-style country code, e.g. DE, US, JP."}
+      - {name: target_enrollment, type: integer, description: "Planned number of enrolled (randomized) patients."}
+
+  - name: investigators
+    description: Principal investigators staffing a site. One-to-many site -> investigators.
+    primary_key: inv_id
+    tenant_column: sponsor_id
+    columns:
+      - {name: inv_id, type: integer, description: "Surrogate primary key."}
+      - {name: sponsor_id, type: text, description: "Owning sponsor (tenant)."}
+      - {name: site_id, type: integer, description: "FK -> sites.site_id."}
+      - {name: name, type: text, description: "Investigator name."}
+      - {name: specialization, type: text, description: "Clinical specialization."}
+
+  - name: patients
+    description: >
+      Trial participants. A patient consents, is screened (screen_pass), and if
+      eligible is randomized (randomized). 'Enrolled' = randomized patients.
+    primary_key: patient_id
+    tenant_column: sponsor_id
+    columns:
+      - {name: patient_id, type: integer, description: "Surrogate primary key."}
+      - {name: sponsor_id, type: text, description: "Owning sponsor (tenant)."}
+      - {name: site_id, type: integer, description: "FK -> sites.site_id."}
+      - {name: study_id, type: integer, description: "FK -> studies.study_id."}
+      - {name: consent_date, type: date, description: "Date informed consent was signed."}
+      - {name: screen_pass, type: boolean, description: "True if the patient passed screening. False = screen failure."}
+      - {name: randomized, type: boolean, description: "True if the patient was randomized/enrolled."}
+
+  - name: visits
+    description: Patient visits, scheduled and actual. Used for visit compliance and timelines.
+    primary_key: visit_id
+    tenant_column: sponsor_id
+    columns:
+      - {name: visit_id, type: integer, description: "Surrogate primary key."}
+      - {name: sponsor_id, type: text, description: "Owning sponsor (tenant)."}
+      - {name: patient_id, type: integer, description: "FK -> patients.patient_id."}
+      - {name: planned_date, type: date, description: "Scheduled visit date."}
+      - {name: actual_date, type: date, description: "Actual visit date; NULL if not completed."}
+      - {name: status, type: text, description: "completed | scheduled | missed."}
+
+  - name: deviations
+    description: Protocol deviations recorded against a site/study, with type and severity.
+    primary_key: deviation_id
+    tenant_column: sponsor_id
+    columns:
+      - {name: deviation_id, type: integer, description: "Surrogate primary key."}
+      - {name: sponsor_id, type: text, description: "Owning sponsor (tenant)."}
+      - {name: study_id, type: integer, description: "FK -> studies.study_id."}
+      - {name: site_id, type: integer, description: "FK -> sites.site_id."}
+      - {name: type, type: text, description: "Deviation category, e.g. Visit Window."}
+      - {name: severity, type: text, description: "minor | major | critical."}
+      - {name: occurred_date, type: date, description: "Date the deviation occurred."}
+
+  - name: study_users
+    description: Sponsor-side application users (CRAs, data managers, etc.).
+    primary_key: user_id
+    tenant_column: sponsor_id
+    columns:
+      - {name: user_id, type: integer, description: "Surrogate primary key."}
+      - {name: sponsor_id, type: text, description: "Owning sponsor (tenant)."}
+      - {name: name, type: text, description: "User full name."}
+      - {name: email, type: text, description: "User email."}
+      - {name: role, type: text, description: "Application role, e.g. CRA."}
+
+  - name: user_sessions
+    description: Login sessions for study_users; basis for engagement/adoption analytics.
+    primary_key: session_id
+    tenant_column: sponsor_id
+    columns:
+      - {name: session_id, type: integer, description: "Surrogate primary key."}
+      - {name: sponsor_id, type: text, description: "Owning sponsor (tenant)."}
+      - {name: user_id, type: integer, description: "FK -> study_users.user_id."}
+      - {name: login_date, type: date, description: "Date of the login session."}
+      - {name: duration_seconds, type: integer, description: "Session length in seconds."}

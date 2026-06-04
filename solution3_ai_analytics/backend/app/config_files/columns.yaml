@@ -1,0 +1,49 @@
+# Synonyms + business definitions mapping user vocabulary to columns (B8).
+# Phase 2's retrieval/generation uses these to disambiguate plain-English terms.
+
+synonyms:
+  enrolled patients:
+    maps_to: "COUNT(patients.patient_id) for a site (all patient rows joined to the site)"
+    note: >
+      Canonical enrollment metric: every patient row at the site counts (LEFT JOIN
+      sites -> patients). This is what the hero query and the demo arc use.
+  enrollment:
+    maps_to: "COUNT(patients.patient_id) grouped by site"
+  consented:
+    maps_to: "patients with a non-null consent_date"
+  screen failure:
+    maps_to: "patients with screen_pass = false"
+  screen-failure rate:
+    maps_to: "count(screen_pass = false) / count(*) of patients at a site"
+    note: "Separate from enrollment count; elevated at the at-risk sites."
+  enrollment vs target:
+    maps_to: "100.0 * COUNT(patients.patient_id) / sites.target_enrollment"
+    note: "The core enrollment KPI. target_enrollment lives on sites."
+  enrollment velocity:
+    maps_to: "count of patients by consent_date over a time window"
+    note: "Declining velocity = fewer recent consents than earlier."
+  at risk:
+    maps_to: "sites well below enrollment target (e.g. < 50% of target)"
+  on track:
+    maps_to: "sites at/above ~80% of enrollment target"
+  watch:
+    maps_to: "sites between roughly 50% and 80% of enrollment target"
+  sites:
+    maps_to: "rows in the sites table"
+  study / trial / protocol:
+    maps_to: "rows in the studies table; identified by studies.code"
+  PI / investigator:
+    maps_to: "rows in the investigators table"
+  deviation / protocol deviation:
+    maps_to: "rows in the deviations table"
+  missed visit:
+    maps_to: "visits with status = 'missed'"
+  engagement / adoption / logins:
+    maps_to: "user_sessions, typically aggregated by user or over time"
+  power user:
+    maps_to: "study_users with a high count of user_sessions"
+
+status_thresholds:
+  on_track: ">= 80% of target_enrollment"
+  watch: "50% to < 80% of target_enrollment"
+  at_risk: "< 50% of target_enrollment"

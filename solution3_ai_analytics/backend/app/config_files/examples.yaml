@@ -1,0 +1,409 @@
+# ~30 few-shot Question -> SQL pairs chosen for maximum PATTERN and SCHEMA
+# coverage (B8) — not question coverage. Every table and every query shape is
+# touched at least once. The hero query is included for rock-solid reliability.
+#
+# These get embedded for retrieval in Phase 2. SQL is written read-only and
+# assumes the tenant filter (sponsor_id = :sponsor) is present / injected.
+
+examples:
+  # --- the hero query (locked demo arc) ---
+  - question: "Which of my MOON-2026 sites are at risk of missing enrollment targets?"
+    sql: |
+      SELECT s.site_id,
+             s.name,
+             s.country,
+             s.target_enrollment,
+             COUNT(p.patient_id) AS enrolled,
+             ROUND(100.0 * COUNT(p.patient_id) / s.target_enrollment) AS pct_of_target,
+             CASE
+               WHEN 100.0 * COUNT(p.patient_id) / s.target_enrollment >= 80 THEN 'ON TRACK'
+               WHEN 100.0 * COUNT(p.patient_id) / s.target_enrollment >= 50 THEN 'WATCH'
+               ELSE 'AT RISK'
+             END AS status
+      FROM app.sites s
+      JOIN app.studies st ON st.study_id = s.study_id
+      LEFT JOIN app.patients p ON p.site_id = s.site_id
+      WHERE st.code = 'MOON-2026' AND s.sponsor_id = :sponsor
+      GROUP BY s.site_id, s.name, s.country, s.target_enrollment
+      ORDER BY pct_of_target ASC;
+
+  # --- single-table filter ---
+  - question: "List all active studies."
+    sql: |
+      SELECT code, name, phase, therapeutic_area
+      FROM app.studies
+      WHERE status = 'Active' AND sponsor_id = :sponsor
+      ORDER BY code;
+
+  - question: "Show every site in Germany."
+    sql: |
+      SELECT site_id, name, country, target_enrollment
+      FROM app.sites
+      WHERE country = 'DE' AND sponsor_id = :sponsor
+      ORDER BY name;
+
+  - question: "List all critical protocol deviations."
+    sql: |
+      SELECT deviation_id, site_id, type, occurred_date
+      FROM app.deviations
+      WHERE severity = 'critical' AND sponsor_id = :sponsor
+      ORDER BY occurred_date DESC;
+
+  # --- join sites -> patients ---
+  - question: "How many enrolled patients does the Munich site have?"
+    sql: |
+      SELECT s.name, COUNT(p.patient_id) AS enrolled
+      FROM app.sites s
+      JOIN app.patients p ON p.site_id = s.site_id
+      WHERE s.name = 'Munich' AND s.sponsor_id = :sponsor
+      GROUP BY s.name;
+
+  - question: "Show the investigator and enrolled count for each MOON-2026 site."
+    sql: |
+      SELECT s.name AS site, i.name AS investigator,
+             COUNT(p.patient_id) AS enrolled
+      FROM app.sites s
+      JOIN app.studies st ON st.study_id = s.study_id
+      JOIN app.investigators i ON i.site_id = s.site_id
+      LEFT JOIN app.patients p ON p.site_id = s.site_id
+      WHERE st.code = 'MOON-2026' AND s.sponsor_id = :sponsor
+      GROUP BY s.name, i.name
+      ORDER BY enrolled DESC;
+
+  # --- filter by study code ---
+  - question: "How many sites are in the MOON-2026 study?"
+    sql: |
+      SELECT COUNT(*) AS n_sites
+      FROM app.sites s
+      JOIN app.studies st ON st.study_id = s.study_id
+      WHERE st.code = 'MOON-2026' AND s.sponsor_id = :sponsor;
+
+  - question: "What therapeutic area is SUNRISE-2027?"
+    sql: |
+      SELECT code, therapeutic_area, phase
+      FROM app.studies
+      WHERE code = 'SUNRISE-2027' AND sponsor_id = :sponsor;
+
+  # --- aggregation / COUNT ---
+  - question: "How many patients are randomized across all studies?"
+    sql: |
+      SELECT COUNT(*) AS randomized_patients
+      FROM app.patients
+      WHERE randomized = true AND sponsor_id = :sponsor;
+
+  - question: "How many total visits have been recorded?"
+    sql: |
+      SELECT COUNT(*) AS total_visits
+      FROM app.visits
+      WHERE sponsor_id = :sponsor;
+
+  - question: "What is the average visit duration target — how many visits are missed?"
+    sql: |
+      SELECT status, COUNT(*) AS n
+      FROM app.visits
+      WHERE sponsor_id = :sponsor
+      GROUP BY status;
+
+  # --- GROUP BY + ORDER BY ranking ---
+  - question: "Rank MOON-2026 sites by enrollment percentage, lowest first."
+    sql: |
+      SELECT s.name,
+             ROUND(100.0 * COUNT(p.patient_id) / s.target_enrollment) AS pct_of_target
+      FROM app.sites s
+      JOIN app.studies st ON st.study_id = s.study_id
+      LEFT JOIN app.patients p ON p.site_id = s.site_id
+      WHERE st.code = 'MOON-2026' AND s.sponsor_id = :sponsor
+      GROUP BY s.name, s.target_enrollment
+      ORDER BY pct_of_target ASC;
+
+  - question: "Which 5 sites have the most protocol deviations?"
+    sql: |
+      SELECT s.name, COUNT(d.deviation_id) AS deviations
+      FROM app.sites s
+      JOIN app.deviations d ON d.site_id = s.site_id
+      WHERE s.sponsor_id = :sponsor
+      GROUP BY s.name
+      ORDER BY deviations DESC
+      LIMIT 5;
+
+  - question: "Count sites per country."
+    sql: |
+      SELECT country, COUNT(*) AS n_sites
+      FROM app.sites
+      WHERE sponsor_id = :sponsor
+      GROUP BY country
+      ORDER BY n_sites DESC;
+
+  # --- time-series over consent / visit dates ---
+  - question: "Show MOON-2026 enrollment by month over the last 6 months."
+    sql: |
+      SELECT date_trunc('month', p.consent_date) AS month,
+             COUNT(p.patient_id) AS enrolled
+      FROM app.patients p
+      JOIN app.studies st ON st.study_id = p.study_id
+      WHERE st.code = 'MOON-2026' AND p.sponsor_id = :sponsor
+        AND p.consent_date >= (CURRENT_DATE - INTERVAL '6 months')
+      GROUP BY month
+      ORDER BY month;
+
+  - question: "What is the 60-day enrollment trend for the Toronto site?"
+    sql: |
+      SELECT p.consent_date, COUNT(p.patient_id) AS enrolled
+      FROM app.patients p
+      JOIN app.sites s ON s.site_id = p.site_id
+      WHERE s.name = 'Toronto' AND p.sponsor_id = :sponsor
+        AND p.consent_date >= (CURRENT_DATE - INTERVAL '60 days')
+      GROUP BY p.consent_date
+      ORDER BY p.consent_date;
+
+  - question: "How many visits were completed each week over the last 8 weeks?"
+    sql: |
+      SELECT date_trunc('week', actual_date) AS week, COUNT(*) AS completed
+      FROM app.visits
+      WHERE status = 'completed' AND sponsor_id = :sponsor
+        AND actual_date >= (CURRENT_DATE - INTERVAL '8 weeks')
+      GROUP BY week
+      ORDER BY week;
+
+  # --- multi-table (sites + patients + deviations) ---
+  - question: "For each MOON-2026 site show enrolled count and deviation count."
+    sql: |
+      SELECT s.name,
+             COUNT(DISTINCT p.patient_id) AS enrolled,
+             COUNT(DISTINCT d.deviation_id) AS deviations
+      FROM app.sites s
+      JOIN app.studies st ON st.study_id = s.study_id
+      LEFT JOIN app.patients p ON p.site_id = s.site_id
+      LEFT JOIN app.deviations d ON d.site_id = s.site_id
+      WHERE st.code = 'MOON-2026' AND s.sponsor_id = :sponsor
+      GROUP BY s.name
+      ORDER BY enrolled ASC;
+
+  - question: "Which sites are at risk and also have major or critical deviations?"
+    sql: |
+      SELECT s.name,
+             ROUND(100.0 * COUNT(p.patient_id) / s.target_enrollment) AS pct_of_target,
+             COUNT(*) FILTER (WHERE d.severity IN ('major','critical')) AS serious_deviations
+      FROM app.sites s
+      LEFT JOIN app.patients p ON p.site_id = s.site_id
+      LEFT JOIN app.deviations d ON d.site_id = s.site_id
+      WHERE s.sponsor_id = :sponsor
+      GROUP BY s.name, s.target_enrollment
+      HAVING 100.0 * COUNT(p.patient_id) / s.target_enrollment < 50
+      ORDER BY pct_of_target ASC;
+
+  # --- screen-failure rate by country ---
+  - question: "What is the screen-failure rate by country?"
+    sql: |
+      SELECT s.country,
+             ROUND(100.0 * COUNT(*) FILTER (WHERE NOT p.screen_pass) / COUNT(*), 1) AS screen_fail_pct
+      FROM app.patients p
+      JOIN app.sites s ON s.site_id = p.site_id
+      WHERE p.sponsor_id = :sponsor
+      GROUP BY s.country
+      ORDER BY screen_fail_pct DESC;
+
+  - question: "Which MOON-2026 sites have the highest screen-failure rates?"
+    sql: |
+      SELECT s.name,
+             ROUND(100.0 * COUNT(*) FILTER (WHERE NOT p.screen_pass) / COUNT(*), 1) AS screen_fail_pct
+      FROM app.patients p
+      JOIN app.sites s ON s.site_id = p.site_id
+      JOIN app.studies st ON st.study_id = s.study_id
+      WHERE st.code = 'MOON-2026' AND p.sponsor_id = :sponsor
+      GROUP BY s.name
+      ORDER BY screen_fail_pct DESC;
+
+  # --- login engagement over a date window ---
+  - question: "How many login sessions happened in the last 30 days?"
+    sql: |
+      SELECT COUNT(*) AS sessions
+      FROM app.user_sessions
+      WHERE sponsor_id = :sponsor
+        AND login_date >= (CURRENT_DATE - INTERVAL '30 days');
+
+  - question: "Who are the most active users by login count?"
+    sql: |
+      SELECT u.name, u.role, COUNT(se.session_id) AS logins
+      FROM app.study_users u
+      JOIN app.user_sessions se ON se.user_id = u.user_id
+      WHERE u.sponsor_id = :sponsor
+      GROUP BY u.name, u.role
+      ORDER BY logins DESC
+      LIMIT 10;
+
+  - question: "Show weekly login engagement over the last 12 weeks."
+    sql: |
+      SELECT date_trunc('week', login_date) AS week, COUNT(*) AS logins
+      FROM app.user_sessions
+      WHERE sponsor_id = :sponsor
+        AND login_date >= (CURRENT_DATE - INTERVAL '12 weeks')
+      GROUP BY week
+      ORDER BY week;
+
+  - question: "What is the average session duration by role?"
+    sql: |
+      SELECT u.role, ROUND(AVG(se.duration_seconds)) AS avg_seconds
+      FROM app.study_users u
+      JOIN app.user_sessions se ON se.user_id = u.user_id
+      WHERE u.sponsor_id = :sponsor
+      GROUP BY u.role
+      ORDER BY avg_seconds DESC;
+
+  # --- cross-study comparison ---
+  - question: "Compare total enrolled patients across all studies."
+    sql: |
+      SELECT st.code, COUNT(p.patient_id) AS enrolled
+      FROM app.studies st
+      LEFT JOIN app.patients p ON p.study_id = st.study_id
+      WHERE st.sponsor_id = :sponsor
+      GROUP BY st.code
+      ORDER BY enrolled DESC;
+
+  - question: "Average enrollment percentage of target per study."
+    sql: |
+      SELECT st.code,
+             ROUND(AVG(100.0 * site_pct.enrolled / site_pct.target_enrollment), 1) AS avg_pct_of_target
+      FROM app.studies st
+      JOIN (
+        SELECT s.study_id, s.target_enrollment,
+               COUNT(p.patient_id) AS enrolled
+        FROM app.sites s
+        LEFT JOIN app.patients p ON p.site_id = s.site_id
+        WHERE s.sponsor_id = :sponsor
+        GROUP BY s.site_id, s.study_id, s.target_enrollment
+      ) site_pct ON site_pct.study_id = st.study_id
+      WHERE st.sponsor_id = :sponsor
+      GROUP BY st.code
+      ORDER BY avg_pct_of_target ASC;
+
+  # --- investigators coverage ---
+  - question: "How many investigators are assigned per study?"
+    sql: |
+      SELECT st.code, COUNT(i.inv_id) AS investigators
+      FROM app.studies st
+      JOIN app.sites s ON s.study_id = st.study_id
+      JOIN app.investigators i ON i.site_id = s.site_id
+      WHERE st.sponsor_id = :sponsor
+      GROUP BY st.code
+      ORDER BY investigators DESC;
+
+  - question: "List investigators specializing in Oncology."
+    sql: |
+      SELECT i.name, s.name AS site, s.country
+      FROM app.investigators i
+      JOIN app.sites s ON s.site_id = i.site_id
+      WHERE i.specialization = 'Oncology' AND i.sponsor_id = :sponsor
+      ORDER BY s.country;
+
+  # --- deviations time + severity ---
+  - question: "Break down deviations by severity for MOON-2026."
+    sql: |
+      SELECT d.severity, COUNT(*) AS n
+      FROM app.deviations d
+      JOIN app.studies st ON st.study_id = d.study_id
+      WHERE st.code = 'MOON-2026' AND d.sponsor_id = :sponsor
+      GROUP BY d.severity
+      ORDER BY n DESC;
+
+  - question: "How many patients consented in total versus how many were randomized?"
+    sql: |
+      SELECT COUNT(*) FILTER (WHERE consent_date IS NOT NULL) AS consented,
+             COUNT(*) FILTER (WHERE randomized) AS randomized
+      FROM app.patients
+      WHERE sponsor_id = :sponsor;
+
+  # --- Phase 5b additions: broaden shapes for LIVE generalization ---
+
+  # visit completion RATE per site (ratio aggregate)
+  - question: "What is the visit completion rate per site?"
+    sql: |
+      SELECT s.name,
+             ROUND(100.0 * COUNT(*) FILTER (WHERE v.status = 'completed') / COUNT(*), 1) AS completion_pct
+      FROM app.sites s
+      JOIN app.patients p ON p.site_id = s.site_id
+      JOIN app.visits v ON v.patient_id = p.patient_id
+      WHERE s.sponsor_id = :sponsor
+      GROUP BY s.name
+      ORDER BY completion_pct DESC;
+
+  # deviations over time (monthly time bucket on deviations)
+  - question: "Show protocol deviations by month over the last 6 months."
+    sql: |
+      SELECT date_trunc('month', occurred_date) AS month, COUNT(*) AS deviations
+      FROM app.deviations
+      WHERE sponsor_id = :sponsor
+        AND occurred_date >= (CURRENT_DATE - INTERVAL '6 months')
+      GROUP BY month
+      ORDER BY month;
+
+  # enrollment grouped by therapeutic area (group by a studies attribute)
+  - question: "Compare enrolled patients by therapeutic area."
+    sql: |
+      SELECT st.therapeutic_area, COUNT(p.patient_id) AS enrolled
+      FROM app.studies st
+      LEFT JOIN app.patients p ON p.study_id = st.study_id
+      WHERE st.sponsor_id = :sponsor
+      GROUP BY st.therapeutic_area
+      ORDER BY enrolled DESC;
+
+  # top sites by enrollment (ranking with LIMIT)
+  - question: "What are the top 10 sites by enrolled patients?"
+    sql: |
+      SELECT s.name, s.country, COUNT(p.patient_id) AS enrolled
+      FROM app.sites s
+      LEFT JOIN app.patients p ON p.site_id = s.site_id
+      WHERE s.sponsor_id = :sponsor
+      GROUP BY s.name, s.country
+      ORDER BY enrolled DESC
+      LIMIT 10;
+
+  # randomization rate by study (ratio with GROUP BY, HAVING-style threshold)
+  - question: "Which studies have a randomization rate below 80%?"
+    sql: |
+      SELECT st.code,
+             ROUND(100.0 * COUNT(*) FILTER (WHERE p.randomized) / COUNT(p.patient_id), 1) AS randomized_pct
+      FROM app.studies st
+      JOIN app.patients p ON p.study_id = st.study_id
+      WHERE st.sponsor_id = :sponsor
+      GROUP BY st.code
+      HAVING 100.0 * COUNT(*) FILTER (WHERE p.randomized) / COUNT(p.patient_id) < 80
+      ORDER BY randomized_pct ASC;
+
+  # --- Wow-set patterns: deviations-by-site, scatter, cumulative ---
+
+  # deviations ranked by site within a study (ranked bar)
+  - question: "Where are protocol deviations concentrated across MOON-2026 sites?"
+    sql: |
+      SELECT s.name, COUNT(d.deviation_id) AS deviations
+      FROM app.sites s
+      JOIN app.studies st ON st.study_id = s.study_id
+      LEFT JOIN app.deviations d ON d.site_id = s.site_id
+      WHERE st.code = 'MOON-2026' AND s.sponsor_id = :sponsor
+      GROUP BY s.name
+      ORDER BY deviations DESC;
+
+  # enrolled count vs screen-failure rate per site (scatter — two measures per site)
+  - question: "How do site size and screen-failure rate relate for MOON-2026?"
+    sql: |
+      SELECT s.name,
+             COUNT(p.patient_id) AS enrolled,
+             ROUND(100.0 * COUNT(*) FILTER (WHERE NOT p.screen_pass) / COUNT(*), 1) AS screen_fail_pct
+      FROM app.sites s
+      JOIN app.studies st ON st.study_id = s.study_id
+      JOIN app.patients p ON p.site_id = s.site_id
+      WHERE st.code = 'MOON-2026' AND s.sponsor_id = :sponsor
+      GROUP BY s.name
+      ORDER BY enrolled;
+
+  # cumulative enrollment over time (windowed running total)
+  - question: "Show cumulative enrollment over the past year for MOON-2026."
+    sql: |
+      SELECT date_trunc('month', p.consent_date) AS month,
+             COUNT(*) AS monthly,
+             SUM(COUNT(*)) OVER (ORDER BY date_trunc('month', p.consent_date)) AS cumulative
+      FROM app.patients p
+      JOIN app.studies st ON st.study_id = p.study_id
+      WHERE st.code = 'MOON-2026' AND p.sponsor_id = :sponsor
+      GROUP BY date_trunc('month', p.consent_date)
+      ORDER BY month;
