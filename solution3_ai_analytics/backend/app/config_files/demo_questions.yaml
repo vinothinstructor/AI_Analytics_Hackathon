@@ -22,8 +22,8 @@ presentation_changes:
 # The 3 empty-state starter chips — chosen to hint at varied visuals.
 starters:
   - "Which of my MOON-2026 sites are at risk of missing enrollment targets, and what's the 60-day trend?"
-  - "Break down protocol deviations by severity."
-  - "Show cumulative enrollment over the past year for MOON-2026."
+  - "Show the 60-day enrollment trend for the at-risk sites"
+  - "How do site size and screen-failure rate relate for MOON-2026?"
 
 # Wow set (scripted): question -> chart type, one-line note, and curated chips
 # (which re-ask exact captured questions, so chip-chains stay cache-consistent).

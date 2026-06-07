@@ -25,9 +25,20 @@ export function AIResponse({ message, onPickFollowup, onShowSql, onRevealed, str
   const [reasoningComplete, setReasoningComplete] = useState(false);
   const [textComplete, setTextComplete] = useState(false);
 
-  // Summary streams only after the staged sequence completes; the fast-path (no
-  // stages) has nothing to wait for. When `instant`, everything shows at once.
-  const summaryReady = instant || (m.hasStages ? reasoningComplete : true);
+  // Show the agent-reasoning indicator the instant the message exists — before the
+  // backend's first stage event arrives (the 1–2 s Azure gap in LIVE). With the
+  // default empty stages, its first step ("Retrieving schema") renders in its
+  // running/spinner state right away, so the bubble is never empty. Real stage
+  // events then flow into the SAME mounted component (no remount, no flicker).
+  // `awaitingContent` covers the pre-stage gap and any no-stage fast path until
+  // the first token/error lands; once content arrives the indicator yields to it.
+  const awaitingContent = !instant && !m.error && !m.done && m.summary.length === 0;
+  const showReasoning = instant ? m.hasStages : m.hasStages || awaitingContent;
+
+  // Summary streams only after the reasoning indicator completes; with no reasoning
+  // shown (fast path, content already in) it shows immediately. When `instant`,
+  // everything shows at once.
+  const summaryReady = instant || (showReasoning ? reasoningComplete : true);
   const revealChart = instant || textComplete;
 
   // Persist completion once the first-arrival animation finishes, so re-mounts
@@ -51,7 +62,7 @@ export function AIResponse({ message, onPickFollowup, onShowSql, onRevealed, str
             </div>
           ) : (
             <>
-              {m.hasStages && (
+              {showReasoning && (
                 <AgentReasoning
                   stages={m.stages}
                   pipelineDone={m.done}

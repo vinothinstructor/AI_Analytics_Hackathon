@@ -51,6 +51,30 @@ function isNumeric(v: unknown): v is number {
   return typeof v === "number" && !Number.isNaN(v);
 }
 
+// Derive risk status CLIENT-SIDE from the numeric values in the rows, so LIVE
+// charts get the same red/amber/green story as FAKE without the LLM providing a
+// status field. (No hardcoded site names.)
+const FAIL_FIELD = /fail|miss/i; // a "higher is worse" rate (screen-failure, missed)
+const PCT_FIELD = /pct|percent|rate|%/i;
+
+// screen-failure / miss rate: higher is worse.
+function failStatus(v: number): Status {
+  return v >= 20 ? "AT RISK" : v >= 10 ? "WATCH" : "ON TRACK";
+}
+// A bar's measure: color enrollment/progress % by risk (>=80 green / 50-79 amber
+// / <50 red); leave counts and failure-rate bars teal so existing looks hold.
+function barCellColor(field: string, value: unknown): string {
+  if (isNumeric(value) && PCT_FIELD.test(field) && !FAIL_FIELD.test(field)) {
+    return statusColor(statusForPct(value));
+  }
+  return TEAL;
+}
+// A scatter point's risk: from a screen-failure field (higher worse) or an
+// enrollment/progress % (higher better).
+function scatterStatus(field: string, value: number): Status {
+  return FAIL_FIELD.test(field) ? failStatus(value) : statusForPct(value);
+}
+
 function fieldsPresent(rows: Row[], fields: (string | null | undefined)[]): boolean {
   if (!rows.length) return false;
   const cols = new Set(Object.keys(rows[0]));
@@ -67,6 +91,35 @@ function numericField(rows: Row[], prefer?: string | null, fallback?: string | n
   return null;
 }
 
+// Robustly pick the measure (numeric, preferring a %/pct column) and the label
+// (string, preferring a name-like column, never the status column) from the rows —
+// so the chart renders correctly even when the summarizer mislabels x_field/y_field.
+function pickNumeric(rows: Row[], prefer: (string | null | undefined)[]): string {
+  const r0 = rows[0] ?? {};
+  const cols = Object.keys(r0);
+  const isN = (k?: string | null) => !!k && isNumeric(r0[k]);
+  return (
+    cols.find((k) => /pct|percent/i.test(k) && isN(k)) ||
+    prefer.find((c) => isN(c)) ||
+    cols.find((k) => isN(k)) ||
+    prefer.find(Boolean) ||
+    "value"
+  ) as string;
+}
+function pickCategory(rows: Row[], prefer: (string | null | undefined)[]): string {
+  const r0 = rows[0] ?? {};
+  const cols = Object.keys(r0);
+  const isStr = (k?: string | null) => !!k && typeof r0[k] === "string";
+  if (isStr("name")) return "name";
+  return (
+    prefer.find((c) => isStr(c) && !/status|risk/i.test(c!)) ||
+    cols.find((k) => /name|site|study|country|code|role|type|severity/i.test(k) && isStr(k)) ||
+    cols.find((k) => isStr(k) && !/status|risk/i.test(k)) ||
+    prefer.find(Boolean) ||
+    "name"
+  ) as string;
+}
+
 function Title({ text }: { text?: string | null }) {
   if (!text) return null;
   return <div className="mb-2 text-sm font-semibold text-navy">{text}</div>;
@@ -74,8 +127,10 @@ function Title({ text }: { text?: string | null }) {
 
 // ----- the hero "progress vs target" horizontal bar (color_field === status) -----
 function ProgressBar({ spec, rows }: { spec: ChartSpec; rows: Row[] }) {
-  const pctKey = spec.x_field || "pct_of_target";
-  const nameKey = spec.y_field || "name";
+  // Derive from the data (don't trust the summarizer's x/y labels, which may be
+  // swapped or point at the status column → NaN bars).
+  const pctKey = pickNumeric(rows, [spec.x_field, spec.y_field, "pct_of_target"]);
+  const nameKey = pickCategory(rows, [spec.y_field, spec.x_field, "name"]);
   const height = Math.max(200, rows.length * 38 + 30);
 
   const renderEndLabel = (props: any) => {
@@ -130,7 +185,11 @@ function GenericBar({ spec, rows }: { spec: ChartSpec; rows: Row[] }) {
           <XAxis dataKey={xKey} tick={{ fontSize: 11 }} />
           <YAxis tick={{ fontSize: 11 }} />
           <Tooltip />
-          <Bar dataKey={yKey!} fill={TEAL} radius={[4, 4, 0, 0]} />
+          <Bar dataKey={yKey!} radius={[4, 4, 0, 0]}>
+            {rows.map((r, i) => (
+              <Cell key={i} fill={barCellColor(yKey!, r[yKey!])} />
+            ))}
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
     </div>
@@ -159,7 +218,11 @@ function RankedBar({ spec, rows }: { spec: ChartSpec; rows: Row[] }) {
           <CartesianGrid horizontal={false} stroke="#f1f5f9" />
           <XAxis type="number" tick={{ fontSize: 11 }} unit={isPct ? "%" : ""} />
           <YAxis type="category" dataKey={nameKey} width={94} tick={{ fontSize: 11 }} />
-          <Bar dataKey={valKey} fill={TEAL} radius={[0, 4, 4, 0]} barSize={16} label={renderLabel} />
+          <Bar dataKey={valKey} radius={[0, 4, 4, 0]} barSize={16} label={renderLabel}>
+            {rows.map((r, i) => (
+              <Cell key={i} fill={barCellColor(valKey, r[valKey])} />
+            ))}
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
     </div>
@@ -187,20 +250,46 @@ function LineOrArea({ spec, rows, area }: { spec: ChartSpec; rows: Row[]; area?:
   const xKey = spec.x_field!;
   const yKey = numericField(rows, spec.y_field) || spec.y_field!;
   const Chart = area ? AreaChart : LineChart;
-  let data = rows;
+  let data: Row[];
   let series: string[] = [yKey];
   if (spec.color_field && fieldsPresent(rows, [spec.color_field])) {
     const piv = pivotSeries(rows, xKey, yKey, spec.color_field);
     data = piv.data;
     series = piv.series;
+  } else {
+    // Single series: aggregate duplicate x-values (e.g. several at-risk sites on
+    // the same date) by SUMMING y, so the line doesn't zigzag flat at 1.
+    const agg = new Map<string, Row>();
+    for (const r of rows) {
+      const k = String(r[xKey]);
+      const cur = agg.get(k) ?? { [xKey]: r[xKey], [yKey]: 0 };
+      cur[yKey] = (Number(cur[yKey]) || 0) + (Number(r[yKey]) || 0);
+      agg.set(k, cur);
+    }
+    data = [...agg.values()];
   }
+  // Chronological x-axis (ISO date strings sort lexicographically == chronological;
+  // numeric x sorts numerically). Fixes the scrambled/descending order.
+  data = [...data].sort((a, b) => {
+    const av = a[xKey] as any, bv = b[xKey] as any;
+    return av < bv ? -1 : av > bv ? 1 : 0;
+  });
   return (
     <div style={{ width: "100%", height: 280 }}>
       <ResponsiveContainer>
         <Chart data={data} margin={{ left: 4, right: 16, top: 8, bottom: 8 }}>
           <CartesianGrid stroke="#f1f5f9" />
-          <XAxis dataKey={xKey} tick={{ fontSize: 11 }} />
-          <YAxis tick={{ fontSize: 11 }} />
+          <XAxis
+            dataKey={xKey}
+            tick={{ fontSize: 11 }}
+            minTickGap={28}
+            tickFormatter={(v) => {
+              const s = String(v);
+              // Truncate ISO datetimes (e.g. 2026-04-06T00:00:00+00:00) to the date.
+              return /^\d{4}-\d{2}-\d{2}T/.test(s) ? s.slice(0, 10) : s;
+            }}
+          />
+          <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
           <Tooltip />
           {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
           {series.map((s, i) =>
@@ -251,9 +340,39 @@ function PieView({ spec, rows, donut }: { spec: ChartSpec; rows: Row[]; donut?: 
 function ScatterView({ spec, rows }: { spec: ChartSpec; rows: Row[] }) {
   const xKey = spec.x_field!;
   const yKey = spec.y_field!;
-  const colorKey = spec.color_field;
   const yIsPct = /pct|rate|%/i.test(yKey);
-  const groups = colorKey ? [...new Set(rows.map((r) => String(r[colorKey])))] : [null];
+
+  // Color precedence: (1) an explicit STATUS/risk field if the LLM provided one,
+  // (2) risk DERIVED client-side from a screen-failure / enrollment-% field (so
+  // the risk story shows even when the LLM colors by name or omits a color field),
+  // (3) any other categorical color field, (4) a single teal series.
+  const has = (f?: string | null) => !!(f && rows[0] && f in rows[0]);
+  const statusField = has(spec.color_field) && /status|risk/i.test(spec.color_field!) ? spec.color_field! : null;
+  const riskField = !statusField
+    ? [yKey, xKey].find((f) => f && (FAIL_FIELD.test(f) || PCT_FIELD.test(f)))
+    : null;
+  const catField = !statusField && !riskField && has(spec.color_field) ? spec.color_field! : null;
+
+  let groups: { label: string | null; color: string; data: Row[] }[];
+  if (statusField || catField) {
+    const key = (statusField || catField)!;
+    const labels = [...new Set(rows.map((r) => String(r[key])))];
+    groups = labels.map((g, i) => ({
+      label: g, color: colorForName(g, i), data: rows.filter((r) => String(r[key]) === g),
+    }));
+  } else if (riskField) {
+    const buckets: Record<string, Row[]> = {};
+    for (const r of rows) {
+      const s = scatterStatus(riskField, Number(r[riskField]));
+      (buckets[s] ??= []).push(r);
+    }
+    groups = (["AT RISK", "WATCH", "ON TRACK"] as Status[])
+      .filter((s) => buckets[s])
+      .map((s) => ({ label: s, color: statusColor(s), data: buckets[s] }));
+  } else {
+    groups = [{ label: null, color: TEAL, data: rows }];
+  }
+
   return (
     <div style={{ width: "100%", height: 310 }}>
       <ResponsiveContainer>
@@ -268,14 +387,9 @@ function ScatterView({ spec, rows }: { spec: ChartSpec; rows: Row[] }) {
             label={{ value: titleCase(yKey), angle: -90, position: "insideLeft", fontSize: 11, fill: "#64748b" }}
           />
           <Tooltip cursor={{ strokeDasharray: "3 3" }} />
-          {colorKey && <Legend wrapperStyle={{ fontSize: 11 }} />}
+          {groups.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
           {groups.map((g, gi) => (
-            <Scatter
-              key={g ?? gi}
-              name={g ?? undefined}
-              data={colorKey ? rows.filter((r) => String(r[colorKey]) === g) : rows}
-              fill={g ? colorForName(g, gi) : TEAL}
-            />
+            <Scatter key={g.label ?? gi} name={g.label ?? undefined} data={g.data} fill={g.color} />
           ))}
         </ScatterChart>
       </ResponsiveContainer>
@@ -344,9 +458,13 @@ export function ChartRenderer({ chart, instant = false }: { chart: ChartData; in
 
     switch (spec.type) {
       case "bar": {
-        // Status-colored progress bar (hero) — always meaningful.
-        if (spec.color_field === "status" && fieldsPresent(rows, [spec.x_field, spec.y_field]))
-          return <ProgressBar spec={spec} rows={rows} />;
+        // Enrollment-vs-target signature: a status column + a pct column ->
+        // status-colored progress bar (the hero). Detected from the DATA so it
+        // works regardless of how the summarizer labeled color_field/x/y.
+        const r0 = rows[0] || {};
+        const hasStatus = typeof r0["status"] === "string";
+        const hasPct = Object.keys(r0).some((k) => /pct|percent/i.test(k) && isNumeric(r0[k]));
+        if (hasStatus && hasPct) return <ProgressBar spec={spec} rows={rows} />;
         // Horizontal ranked bar when the category is on Y and the measure is numeric.
         const yIsCategory =
           spec.y_field && spec.x_field &&

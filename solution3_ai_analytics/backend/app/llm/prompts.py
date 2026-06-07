@@ -21,6 +21,15 @@ Rules:
 - Do NOT add any tenant/sponsor filter — the system injects sponsor_id automatically.
 - Prefer JOINs over subqueries.
 - Add LIMIT 100 unless the query is an aggregation (GROUP BY / single-row aggregate).
+- "Which/what … are at risk", ranking, or comparison questions are SUMMARIES:
+  return exactly ONE row per entity (e.g. one row per site: enrolled vs target),
+  NOT a per-day/per-week time series — even if the question also mentions a trend
+  (the trend is described in words, not charted). Use LEFT JOIN from the entity so
+  every entity appears (e.g. ALL sites in the study), and do NOT add a HAVING/limit
+  that drops entities.
+- Only return a time series (one row per date/period) when the question's PRIMARY
+  ask is the trend over time (e.g. "show the … trend").
+- Match the retrieved example whose question is closest to the user's question.
 """
 
 SUMMARIZE_SYSTEM = """You summarize SQL query results for a clinical-trials dashboard.

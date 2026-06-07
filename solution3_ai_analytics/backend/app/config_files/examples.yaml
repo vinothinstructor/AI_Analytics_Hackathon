@@ -7,7 +7,13 @@
 
 examples:
   # --- the hero query (locked demo arc) ---
-  - question: "Which of my MOON-2026 sites are at risk of missing enrollment targets?"
+  # The hero question is two-part ("...at risk... and what's the 60-day trend?").
+  # Answer it as ONE per-site enrollment-vs-target summary over ALL 14 MOON-2026
+  # sites (one row per site, ranked by pct) — that is the headline bar chart. The
+  # 60-day trend is described in the narrative summary, NOT returned as rows; do
+  # NOT add a per-day/per-week time series here and do NOT join visits. Returning
+  # one clean row per site is what makes the summarizer pick a bar chart.
+  - question: "Which of my MOON-2026 sites are at risk of missing enrollment targets, and what's the 60-day trend?"
     sql: |
       SELECT s.site_id,
              s.name,
@@ -26,6 +32,25 @@ examples:
       WHERE st.code = 'MOON-2026' AND s.sponsor_id = :sponsor
       GROUP BY s.site_id, s.name, s.country, s.target_enrollment
       ORDER BY pct_of_target ASC;
+
+  # --- the at-risk 60-day trend (the hero FOLLOW-UP) ---
+  # Multi-site weekly time series for the at-risk sites: one row per site per week,
+  # ordered chronologically. Bucketing by week (not day) keeps the line readable;
+  # the `name` column lets the summarizer draw one line per site.
+  - question: "Show the 60-day enrollment trend for the at-risk sites"
+    sql: |
+      SELECT s.name,
+             to_char(date_trunc('week', p.consent_date), 'YYYY-MM-DD') AS week,
+             COUNT(p.patient_id) AS enrolled
+      FROM app.sites s
+      JOIN app.studies st ON st.study_id = s.study_id
+      JOIN app.patients p ON p.site_id = s.site_id
+      WHERE st.code = 'MOON-2026'
+        AND s.name IN ('Tokyo', 'Boston', 'Toronto')
+        AND p.consent_date >= (CURRENT_DATE - INTERVAL '60 days')
+        AND s.sponsor_id = :sponsor
+      GROUP BY s.name, date_trunc('week', p.consent_date)
+      ORDER BY date_trunc('week', p.consent_date);
 
   # --- single-table filter ---
   - question: "List all active studies."

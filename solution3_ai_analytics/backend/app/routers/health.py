@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
+from ..config import settings
 from ..llm import LLMClient, resolve_llm_mode
 
 router = APIRouter()
@@ -10,7 +11,9 @@ router = APIRouter()
 
 @router.get("/health")
 def health() -> dict:
-    return {"status": "ok", "service": "solution3", "port": 8003}
+    # `llm_mode` is the server default (from .env); the frontend uses it to seed
+    # the mode dropdown so the header reflects the configured mode.
+    return {"status": "ok", "service": "solution3", "port": 8003, "llm_mode": settings.LLM_MODE}
 
 
 @router.get("/llm/ping")

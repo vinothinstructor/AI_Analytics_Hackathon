@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { LayoutGrid, FileText, Users, Activity, FlaskConical } from "lucide-react";
 import { apiFetch } from "@/lib/apiFetch";
 import { ModeDropdown } from "@/components/ModeDropdown";
+import { LLM_MODES, urlModeOverride, useModeStore, type LlmMode } from "@/store/modeStore";
 
 // Mock "One Home for Sites" product shell. All data is synthetic and generated
 // locally — this is purely a visual wrapper, not a real data source. Phase 4
@@ -16,14 +17,21 @@ export function OneHomeWrapper({ children }: { children?: ReactNode }) {
   const [connected, setConnected] = useState<boolean | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [stats, setStats] = useState<OverviewStats | null>(null);
+  const setMode = useModeStore((s) => s.setMode);
 
   // Health ping THROUGH apiFetch -> carries X-LLM-Mode and uses the /api proxy.
   useEffect(() => {
     const t0 = performance.now();
     apiFetch("/health")
-      .then((r) => {
+      .then(async (r) => {
         setConnected(r.ok);
         setLatencyMs(Math.round(performance.now() - t0));
+        // Seed the mode dropdown from the server's configured LLM_MODE (.env),
+        // unless the URL explicitly sets ?mode=… (which wins).
+        if (r.ok && !urlModeOverride()) {
+          const m = (await r.json())?.llm_mode?.toUpperCase() as LlmMode | undefined;
+          if (m && LLM_MODES.includes(m)) setMode(m);
+        }
       })
       .catch(() => setConnected(false));
     // Real, tenant-scoped overview stats for the cards + recent-studies list.

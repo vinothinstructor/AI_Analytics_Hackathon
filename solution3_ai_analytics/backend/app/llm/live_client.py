@@ -7,12 +7,29 @@ raises immediately and the caller surfaces a readable error.
 """
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from ..config import settings
 from .base import LLMClient, LLMMode, Message
 
 
 class AzureCredentialsMissingError(RuntimeError):
     """Raised when LIVE mode is selected but Azure is not configured."""
+
+
+def _base_endpoint(raw: str) -> str:
+    """The classic AzureOpenAI client wants the BASE resource URL only
+    (https://<resource>.openai.azure.com/ or .services.ai.azure.com/); it appends
+    /openai/deployments/<deployment>/... and sends ?api-version=... itself.
+
+    Defensively strip any path/query so a pasted full URL — e.g. a new-style
+    .../openai/v1/responses endpoint — doesn't collide with the classic client and
+    trigger 'api-version query parameter is not allowed when using /v1 path'.
+    """
+    parts = urlsplit(raw.strip())
+    if parts.scheme and parts.netloc:
+        return f"{parts.scheme}://{parts.netloc}/"
+    return raw.strip()
 
 
 class LiveLLMClient(LLMClient):
@@ -39,7 +56,7 @@ class LiveLLMClient(LLMClient):
         from openai import AzureOpenAI
 
         self._client = AzureOpenAI(
-            azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
+            azure_endpoint=_base_endpoint(settings.AZURE_OPENAI_ENDPOINT),
             api_key=settings.AZURE_OPENAI_API_KEY,
             api_version=settings.AZURE_OPENAI_API_VERSION,
         )

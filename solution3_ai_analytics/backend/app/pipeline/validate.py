@@ -78,6 +78,43 @@ def _output_aliases(tree: exp.Expression) -> set[str]:
     return names
 
 
+def _top_level_conjuncts(where: Optional[exp.Where]) -> list[exp.Expression]:
+    """Direct AND-conjuncts of a scope's WHERE — does NOT descend into nested
+    subqueries (their predicates belong to their own SELECT scope)."""
+    if where is None:
+        return []
+
+    def split(e: exp.Expression) -> list[exp.Expression]:
+        if isinstance(e, exp.Paren):
+            return split(e.this)
+        if isinstance(e, exp.And):
+            return split(e.left) + split(e.right)
+        return [e]
+
+    return split(where.this)
+
+
+def _scope_has_tenant_filter(where: Optional[exp.Where], alias: str, table_name: str) -> bool:
+    """True if this scope's WHERE already AND-includes `<anchor>.sponsor_id = :sponsor_id`
+    (qualified to the anchor alias/name, or unqualified in a single-table scope).
+    Only matches our enforced placeholder form — never a literal — so we never skip
+    injecting real tenant enforcement."""
+    for c in _top_level_conjuncts(where):
+        if not isinstance(c, exp.EQ):
+            continue
+        col = c.left if isinstance(c.left, exp.Column) else (
+            c.right if isinstance(c.right, exp.Column) else None
+        )
+        ph = c.right if isinstance(c.right, exp.Placeholder) else (
+            c.left if isinstance(c.left, exp.Placeholder) else None
+        )
+        if col is None or ph is None:
+            continue
+        if col.name == TENANT_PARAM and ph.this == TENANT_PARAM and col.table in ("", alias, table_name):
+            return True
+    return False
+
+
 def validate_and_inject(sql: str) -> ValidationResult:
     cache = schema_cache()
     allowed = allowed_tables()
@@ -101,17 +138,17 @@ def validate_and_inject(sql: str) -> ValidationResult:
     if FORBIDDEN_TYPES and list(stmt.find_all(*FORBIDDEN_TYPES)):
         return _fail("Statement contains a forbidden (write/DDL) operation.")
 
-    # Query-local names that are NOT base tables: CTE names + derived-table aliases.
+    # Query-local relations that are NOT base tables: WITH/CTE names and
+    # derived-table (subquery) aliases. These are defined by the query itself.
     cte_names = {c.alias_or_name for c in stmt.find_all(exp.CTE)}
-    derived_aliases = cte_names | {
-        s.alias for s in stmt.find_all(exp.Subquery) if s.alias
-    }
+    subquery_aliases = {s.alias for s in stmt.find_all(exp.Subquery) if s.alias}
 
-    # 4. table whitelist — only app.* tables from tables.yaml (CTE names exempt)
+    # 4. table whitelist — only app.* base tables. References to a WITH-defined
+    # relation (a CTE) are query-local, not base tables, so they're exempt.
     tables_used: list[str] = []
     for t in stmt.find_all(exp.Table):
         if t.name in cte_names and not t.db:
-            continue
+            continue  # reference to a CTE, not a base table
         if t.db and t.db.lower() not in ("app", ""):
             return _fail(f"Table schema '{t.db}' is not allowed (only app.*).")
         if t.name not in allowed:
@@ -119,19 +156,30 @@ def validate_and_inject(sql: str) -> ValidationResult:
         if t.name not in tables_used:
             tables_used.append(t.name)
 
-    # 5. column existence
+    # alias-or-name -> real relation. A CTE referenced as `moon_sites ms` is an
+    # exp.Table(name=moon_sites, alias=ms), so alias_map['ms'] == 'moon_sites'.
     alias_map = _alias_map(stmt)
-    referenced = set(alias_map.values())
+    # Every query-local relation reference (CTE names, their aliases, subquery
+    # aliases) — columns from these can't be checked against the base schema.
+    local_relations = cte_names | subquery_aliases | {
+        a for a, real in alias_map.items() if real in cte_names
+    }
+    referenced_base = {real for real in alias_map.values() if real in cache}
     out_aliases = _output_aliases(stmt)
+
+    # 5. column existence — base-table columns are STILL strictly checked; columns
+    # from CTEs / derived tables are accepted (the engine resolves them).
     for col in stmt.find_all(exp.Column):
         name = col.name
         if name == "*" or col.find(exp.Star):
             continue
         qualifier = col.table
         if qualifier:
-            if qualifier in derived_aliases:
-                continue  # columns exposed by a subquery/CTE — can't check, allow
+            if qualifier in local_relations:
+                continue  # CTE / derived-table column — allowed
             real = alias_map.get(qualifier, qualifier)
+            if real in cte_names:
+                continue
             if real not in cache:
                 return _fail(f"Unknown table/alias '{qualifier}' for column '{name}'.")
             if name not in cache[real]:
@@ -139,10 +187,26 @@ def validate_and_inject(sql: str) -> ValidationResult:
         else:
             if name in out_aliases:
                 continue
-            if not any(name in cache.get(rt, set()) for rt in referenced):
-                return _fail(f"Column '{name}' does not exist on any referenced table.")
+            if any(name in cache[rt] for rt in referenced_base):
+                continue
+            if local_relations:
+                continue  # CTE/derived columns can't be enumerated — allow
+            return _fail(f"Column '{name}' does not exist on any referenced table.")
 
-    # 6. tenant-filter injection on the anchor of every SELECT scope.
+    # Normalize any model-supplied bind placeholders (e.g. :sponsor, copied from
+    # the few-shot examples) to the single enforced tenant param FIRST — so the
+    # de-dup below recognizes a model-written `alias.sponsor_id = :sponsor` as the
+    # same enforced predicate we'd inject and doesn't add a duplicate. (Placeholders
+    # in this app are only ever the tenant; all literals are inlined.)
+    for ph in stmt.find_all(exp.Placeholder):
+        ph.set("this", TENANT_PARAM)
+
+    # 6. tenant-filter injection on the base-table anchor of every SELECT scope
+    # (incl. the SELECTs INSIDE each CTE that reads base tables — so wrapping a
+    # query in a CTE can NOT bypass tenant isolation). CTE/derived-table anchors
+    # are skipped: their underlying base reads are already filtered. The filter is
+    # injected exactly ONCE per scope — if the model already wrote the same
+    # `anchor.sponsor_id = :sponsor_id` predicate, we don't duplicate it.
     # (Access the direct FROM arg — key is "from_" in current sqlglot, "from" in
     # older versions — NOT select.find(exp.From), which could descend into a
     # subquery in the SELECT list.)
@@ -153,7 +217,13 @@ def validate_and_inject(sql: str) -> ValidationResult:
         anchor = from_.this
         if not isinstance(anchor, exp.Table):
             continue  # derived table / subquery handled by its own SELECT scope
+        if anchor.name in cte_names and not anchor.db:
+            continue  # CTE reference, not a base table — skip (inner read is filtered)
+        if anchor.name not in allowed:
+            continue  # safety: only inject on a known base table
         alias = anchor.alias_or_name
+        if _scope_has_tenant_filter(select.args.get("where"), alias, anchor.name):
+            continue  # already tenant-filtered on this anchor — do not duplicate
         cond = exp.column(TENANT_PARAM, table=alias).eq(exp.Placeholder(this=TENANT_PARAM))
         select.where(cond, append=True, copy=False)
 
