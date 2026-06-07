@@ -239,6 +239,21 @@ examples:
       GROUP BY s.name
       ORDER BY screen_fail_pct DESC;
 
+  # --- "what's driving" a single site's screen-failure rate -> per-outcome
+  # breakdown bar (NOT a single KPI row). "What's driving the rate at <site>" asks
+  # for the composition behind the rate, so return one row PER screening outcome
+  # (Passed vs Failed counts) -> a categorical comparison the dashboard charts as a
+  # bar, even when prior turns were one-row-per-site summaries. ~29% fail at Tokyo.
+  - question: "What's driving the screen-failure rate at Tokyo?"
+    sql: |
+      SELECT CASE WHEN p.screen_pass THEN 'Passed' ELSE 'Failed' END AS screen_outcome,
+             COUNT(p.patient_id) AS patient_count
+      FROM app.patients p
+      JOIN app.sites s ON s.site_id = p.site_id
+      WHERE s.name = 'Tokyo' AND p.sponsor_id = :sponsor
+      GROUP BY p.screen_pass
+      ORDER BY patient_count DESC;
+
   # --- login engagement over a date window ---
   - question: "How many login sessions happened in the last 30 days?"
     sql: |

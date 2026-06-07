@@ -1,0 +1,1 @@
+{"response": "```sql\nSELECT \n  CASE WHEN p.screen_pass THEN 'Passed' ELSE 'Failed' END AS screen_outcome, \n  COUNT(p.patient_id) AS patient_count \nFROM app.patients p \nJOIN app.sites s ON s.site_id = p.site_id \nWHERE s.name = 'Tokyo' \n  AND p.sponsor_id = :sponsor \nGROUP BY p.screen_pass \nORDER BY patient_count DESC \nLIMIT 100;\n```"}

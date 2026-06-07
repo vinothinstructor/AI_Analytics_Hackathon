@@ -1,0 +1,1 @@
+{"response": "```sql\nSELECT s.name, \n       ROUND(100.0 * COUNT(*) FILTER (WHERE NOT p.screen_pass) / COUNT(*), 1) AS screen_fail_pct\nFROM app.patients p\nJOIN app.sites s ON s.site_id = p.site_id\nJOIN app.studies st ON st.study_id = s.study_id\nWHERE st.code = 'MOON-2026' AND p.sponsor_id = :sponsor\nGROUP BY s.name\nORDER BY screen_fail_pct DESC\nLIMIT 100;\n```"}

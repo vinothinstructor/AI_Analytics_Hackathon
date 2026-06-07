@@ -1,0 +1,1 @@
+{"response": "```sql\nSELECT v.status, COUNT(v.visit_id) AS visit_count\nFROM app.visits v\nJOIN app.patients p ON p.patient_id = v.patient_id AND p.sponsor_id = v.sponsor_id\nJOIN app.studies st ON st.study_id = p.study_id\nWHERE st.code = 'MOON-2026' AND v.sponsor_id = :sponsor\nGROUP BY v.status\nORDER BY visit_count DESC\nLIMIT 100;\n```"}

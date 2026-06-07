@@ -1,0 +1,1 @@
+{"response": "```sql\nSELECT d.severity, COUNT(*) AS count\nFROM app.deviations d\nWHERE d.sponsor_id = :sponsor\nGROUP BY d.severity\nORDER BY count DESC\nLIMIT 100;\n```"}

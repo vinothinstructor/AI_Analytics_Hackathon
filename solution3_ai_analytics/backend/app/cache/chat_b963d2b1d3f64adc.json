@@ -1,0 +1,1 @@
+{"response": "```sql\nSELECT s.name, COUNT(d.deviation_id) AS deviations\nFROM app.sites s\nJOIN app.studies st ON st.study_id = s.study_id\nLEFT JOIN app.deviations d ON d.site_id = s.site_id\nWHERE st.code = 'MOON-2026' AND s.sponsor_id = :sponsor\nGROUP BY s.name\nORDER BY deviations DESC\nLIMIT 100;\n```"}
